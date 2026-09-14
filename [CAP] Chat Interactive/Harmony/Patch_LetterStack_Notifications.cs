@@ -685,6 +685,79 @@ namespace CAP_ChatInteractive.AI
     }
 
     /// <summary>
+    /// Downed (not dead) colonists and hostiles — same batch channel as deaths so Masie can name them.
+    /// </summary>
+    // MakeDowned + pawn are not on the public Krafs ref stubs — bind by name at runtime.
+    [HarmonyPatch(typeof(Pawn_HealthTracker), "MakeDowned")]
+    public static class Patch_Pawn_MakeDowned_AINotify
+    {
+        [HarmonyPostfix]
+        public static void Postfix(Pawn_HealthTracker __instance, DamageInfo? dinfo, Hediff hediff)
+        {
+            try
+            {
+                var settings = CAPChatInteractiveMod.Instance?.Settings?.GlobalSettings;
+                if (settings == null || !settings.AIChatBotActive)
+                    return;
+
+                Pawn pawn = AccessTools.Field(typeof(Pawn_HealthTracker), "pawn")?.GetValue(__instance) as Pawn;
+                if (pawn == null || pawn.Dead || !pawn.Downed)
+                    return;
+
+                Map pawnMap = pawn.MapHeld ?? pawn.Map;
+                string mapLabel = "an unknown location";
+                string mapContext = "";
+                if (pawnMap != null)
+                {
+                    if (pawnMap.IsPlayerHome)
+                    {
+                        mapLabel = "home colony";
+                        mapContext = " (home colony map)";
+                    }
+                    else
+                    {
+                        mapLabel = AIChatBotService.GetRichMapDescription(pawnMap);
+                        mapContext = " (remote/event map)";
+                    }
+                }
+
+                string name = pawn.LabelShortCap ?? pawn.Name?.ToStringShort ?? "Unknown";
+                string entityDesc = Patch_Pawn_Kill_DeathNotifications.BuildDeathEntityDescription(pawn, name);
+
+                string byDetail = "";
+                Thing instigator = dinfo.HasValue ? dinfo.Value.Instigator : null;
+                DamageDef dmgDef = dinfo.HasValue ? dinfo.Value.Def : null;
+                if (instigator is Pawn killerPawn)
+                {
+                    string killerWho = Patch_Pawn_Kill_DeathNotifications.BuildDeathEntityDescription(
+                        killerPawn,
+                        killerPawn.LabelShortCap ?? killerPawn.Name?.ToStringShort ?? "a pawn");
+                    byDetail = $" was downed by {killerWho}";
+                    if (dmgDef != null)
+                        byDetail += $" ({dmgDef.label})";
+                }
+                else if (hediff?.def != null)
+                {
+                    byDetail = $" was downed ({hediff.def.label})";
+                }
+                else
+                {
+                    byDetail = " was downed";
+                }
+
+                var loc = AIChatBotService.TryCreateMapLocationFromThing(pawn);
+                string message = $"{entityDesc}{byDetail} on {mapLabel}{mapContext}{AIChatBotService.FormatCoordsProse(loc)}";
+                var gameComp = Current.Game?.GetComponent<CAPChatInteractive_GameComponent>();
+                gameComp?.RecordDeath(message, loc, null);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"[RICS AI] Downed notification postfix failed (non-fatal): {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
     /// Postfix on Messages.Message so the AI bot receives interesting toast notices
     /// (health, threats, outcomes). Technical UI types and RICS admin spam are filtered out.
     /// PawnDeath toasts are skipped (death pipeline already notifies). TaskCompletion off by default.
@@ -1242,6 +1315,10 @@ namespace CAP_ChatInteractive.AI
                 {
                     if (h == null || h.def == null)
                         continue;
+                    if (!HediffVisibleToPlayer(h))
+                        continue;
+                    if (MissingPartReplacedByProsthetic(pawn, h))
+                        continue;
                     if (h.TendableNow())
                         return true;
                     if (h.def.lethalSeverity > 0f && h.Severity >= h.def.lethalSeverity * 0.5f)
@@ -1337,6 +1414,11 @@ namespace CAP_ChatInteractive.AI
                 foreach (var h in hs.hediffs)
                 {
                     if (h == null || h.def == null)
+                        continue;
+                    // Do not send Health-tab-hidden leftovers (bionic "Removed" femur, etc.)
+                    if (!HediffVisibleToPlayer(h))
+                        continue;
+                    if (MissingPartReplacedByProsthetic(pawn, h))
                         continue;
 
                     bool lifeThreatening = false;
@@ -1463,6 +1545,76 @@ namespace CAP_ChatInteractive.AI
                 }
             }
             catch { /* best effort */ }
+        }
+
+        private static bool HediffVisibleToPlayer(Hediff h)
+        {
+            try
+            {
+                return h != null && h.Visible;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Hidden/replaced missing parts under a bionic. Health tab does not show these.
+        /// </summary>
+        private static bool MissingPartReplacedByProsthetic(Pawn pawn, Hediff h)
+        {
+            if (!(h is Hediff_MissingPart) || pawn?.health?.hediffSet?.hediffs == null)
+                return false;
+
+            try
+            {
+                if (!h.Bleeding && !h.TendableNow())
+                {
+                    string lab = h.Label ?? h.def?.label ?? "";
+                    if (lab.IndexOf("Removed", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                }
+            }
+            catch { }
+
+            var missingPart = h.Part;
+            if (missingPart == null)
+                return false;
+
+            try
+            {
+                foreach (var other in pawn.health.hediffSet.hediffs)
+                {
+                    if (other == null || other.def == null)
+                        continue;
+                    bool implant = other.def.countsAsAddedPartOrImplant
+                                   || other.def.addedPartProps != null
+                                   || other is Hediff_AddedPart
+                                   || other is Hediff_Implant;
+                    if (!implant)
+                        continue;
+                    var ip = other.Part;
+                    if (ip == null)
+                        continue;
+                    if (PartIsOrAncestorOf(ip, missingPart) || PartIsOrAncestorOf(missingPart, ip))
+                        return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static bool PartIsOrAncestorOf(BodyPartRecord ancestor, BodyPartRecord part)
+        {
+            var p = part;
+            while (p != null)
+            {
+                if (p == ancestor)
+                    return true;
+                p = p.parent;
+            }
+            return false;
         }
 
         internal static List<Pawn> CollectPawnsFromLookTargets(LookTargets lookTargets)

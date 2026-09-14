@@ -233,11 +233,11 @@ namespace CAP_ChatInteractive
 
                     if (onHome && deaths.Count >= 3)
                     {
-                        summary += ". The colony is being raided!";
+                        summary += ". Combat: home defense.";
                     }
                     else if (deaths.Count >= 3)
                     {
-                        summary += ". Heavy losses — we may be raiding or in combat on another map.";
+                        summary += ". Combat: we are the aggressors (mission/event map).";
                     }
 
                     string botName = aiSettings.AIChatBotName ?? "Masie";
