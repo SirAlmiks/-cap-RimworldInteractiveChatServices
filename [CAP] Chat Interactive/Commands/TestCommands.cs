@@ -68,8 +68,7 @@ namespace CAP_ChatInteractive.Commands.TestCommands
             "!races lists races available for !pawn.",
             "Modded events are off by default — enable them in RICS settings.",
             "Anomaly events are off by default — enable them in RICS settings.",
-            "Command Editor: add aliases so one command has many names (or translations).",
-            "Example alias: !bald → !bal, or !dar → !raid for Spanish chat.",
+            "Command Editor: add aliases so one command has many names (or translations).  Example alias: !bald → !bal, or !dar → !raid for Spanish chat.",
             "Freezer locker for food/medicine, workshop locker for weapons — filter per locker.",
             "!dye hair blue recolors your pawn's hair (when dye is set up).",
             "Purchases use fuzzy matching: !event soothe can find Psychic Soothe.",
@@ -80,6 +79,7 @@ namespace CAP_ChatInteractive.Commands.TestCommands
             "LenzaRNG is a Pretty Princess!",
             "LenzaRNG, KillerKeo, and JennaDorDor helped test RICS!",
             "Good prompt engineering: speak to a superintelligent alien who takes everything literally. — Grok",
+            "I love Coffee! I love Coffee! I love Coffee! — Gro",
 
             // ── RimWorld flavor ───────────────────────────────────────
             "Randy is not a weather reporter.",
