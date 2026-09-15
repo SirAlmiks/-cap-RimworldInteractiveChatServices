@@ -1367,6 +1367,12 @@ Also changed message about Ownership and adding mid game to be more clear about 
 <b>MEMORANDUM</b>
 ─────────────────
 - Chat moderators can silence a viewer inside RICS without touching Twitch, Kick, or YouTube. The person can still talk on the platform; RICS just ignores their commands.
+- RimWorld XML sometimes fails to save large mod settings. RICS now keeps a JSON backup and can restore from it.
+
+<b>UPDATED</b>
+──────────────
+- Settings window close now writes XML and a JSON backup. Save Backup still works. Only the 5 newest timestamped backups are kept.
+- If XML and the latest JSON backup do not match on load, you are asked to Review settings or Load backup.
 
 <b>ADDED</b>
 ────────────
@@ -1374,10 +1380,12 @@ Also changed message about Ownership and adding mid game to be more clear about 
 - !runban user — clear RICS ban and timeout (aliases: !ricsunban).
 - !rto user [duration] — timed RICS-only silence, wall clock not game ticks (aliases: !ricstimout, !rtimeout). Default 5 minutes. Examples: !rto bob 10, !rto bob 10m.
 - Viewer Manager: timed-out viewers show amber and remaining time; Unban also clears timeout.
+- Global option: Load settings from latest JSON backup on startup (overwrites XML after RimWorld loads it).
 
 <b>TRANSLATIONS</b>
 ───────────────────
 - Keys for !rban / !runban / !rto and Viewer Manager timeout labels.
+- Keys for JSON settings load option and mismatch dialog.
 "
                 }
 
