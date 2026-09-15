@@ -31,7 +31,7 @@ namespace _CAP__Chat_Interactive
         public static void Draw(Rect region)
         {
             var settings = CAPChatInteractiveMod.Instance.Settings.GlobalSettings;
-            var view = new Rect(0f, 0f, region.width - 16f, 1350f);
+            var view = new Rect(0f, 0f, region.width - 16f, 1400f);
 
             Widgets.BeginScrollView(region, ref _scrollPosition, view);
             var listing = new Listing_Standard();
@@ -47,6 +47,13 @@ namespace _CAP__Chat_Interactive
             listing.GapLine(6f);
             listing.CheckboxLabeled("RICS.Global.EnableDebugLogging".Translate(), ref settings.EnableDebugLogging);
             listing.CheckboxLabeled("RICS.Global.LogAllChatMessages".Translate(), ref settings.LogAllMessages);
+
+            bool preferJson = settings.PreferJsonOnLoad;
+            Rect preferRect = listing.GetRect(Text.LineHeight + 4f);
+            Widgets.CheckboxLabeled(preferRect, "RICS.Global.PreferJsonOnLoad".Translate(), ref preferJson);
+            TooltipHandler.TipRegion(preferRect, "RICS.Global.PreferJsonOnLoad.Tooltip".Translate());
+            if (preferJson != settings.PreferJsonOnLoad)
+                SettingsJsonPersistence.SetPreferJsonOnLoad(preferJson);
 
             // Cooldown setting with slider
             listing.Label(string.Format("RICS.Global.MessageCooldown".Translate(), settings.MessageCooldownSeconds));

@@ -1,26 +1,17 @@
-﻿// CAPChatInteractiveSettings.cs
+// File: CAPChatInteractiveSettings.cs
+//
 // Copyright (c) Captolamia
-// This file is part of CAP Chat Interactive. RICS - RimWorld Interactive Chat System
-// 
-// CAP Chat Interactive is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published
-// by the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// CAP Chat Interactive is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-// 
-// You should have received a copy of the GNU Affero General Public License
-// along with CAP Chat Interactive. If not, see <https://www.gnu.org/licenses/>.
-
-// Global Settings classes for CAP Chat Interactive mod
-// including per-streaming-service settings and global chat settings.
+// This file is part of CAP Chat Interactive (RICS).
+// Licensed under the GNU Affero General Public License v3.0 or later.
+// See LICENSE.txt in the project root for full license text.
+//
+// Global settings classes (per-service + global chat). XML via ExposeData;
+// JSON overlay/recovery is SettingsJsonPersistence.
 
 
 using RimWorld;
 using System.Collections.Generic;
+using System.Reflection;
 using Verse;
 
 namespace CAP_ChatInteractive
@@ -56,7 +47,26 @@ namespace CAP_ChatInteractive
             Scribe_Deep.Look(ref YouTubeSettings, "youtubeSettings");
             Scribe_Deep.Look(ref KickSettings, "kickSettings");
             Scribe_Deep.Look(ref GlobalSettings, "globalSettings");
-            
+        }
+
+        /// <summary>
+        /// Copies nested settings onto this instance (does not replace the nested objects).
+        /// Chat services hold StreamServiceSettings by reference; replacing those objects
+        /// would leave Twitch/YouTube/Kick bound to stale instances.
+        /// </summary>
+        public void CopyFrom(CAPChatInteractiveSettings other)
+        {
+            if (other == null) return;
+
+            TwitchSettings ??= new StreamServiceSettings();
+            YouTubeSettings ??= new StreamServiceSettings();
+            KickSettings ??= new StreamServiceSettings();
+            GlobalSettings ??= new CAPGlobalChatSettings();
+
+            TwitchSettings.CopyFrom(other.TwitchSettings);
+            YouTubeSettings.CopyFrom(other.YouTubeSettings);
+            KickSettings.CopyFrom(other.KickSettings);
+            GlobalSettings.CopyFrom(other.GlobalSettings);
         }
     }
 
@@ -103,6 +113,29 @@ namespace CAP_ChatInteractive
             Scribe_Values.Look(ref RedirectUri, "redirectUri", "");
         }
 
+        /// <summary>
+        /// Field copy onto the existing instance. Skips <see cref="IsConnected"/> so a JSON
+        /// restore does not clobber live connection state held on this same object.
+        /// </summary>
+        public void CopyFrom(StreamServiceSettings other)
+        {
+            if (other == null) return;
+
+            Enabled = other.Enabled;
+            ChannelName = other.ChannelName ?? "";
+            BotUsername = other.BotUsername ?? "";
+            AccessToken = other.AccessToken ?? "";
+            ClientId = other.ClientId ?? "";
+            AutoConnect = other.AutoConnect;
+            suspendFeedback = other.suspendFeedback;
+            useWhisperForCommands = other.useWhisperForCommands;
+            forceUseWhisper = other.forceUseWhisper;
+            forceUseWhisperMessageTimer = other.forceUseWhisperMessageTimer;
+            ClientSecret = other.ClientSecret ?? "";
+            RefreshToken = other.RefreshToken ?? "";
+            RedirectUri = other.RedirectUri ?? "";
+        }
+
         public bool CanConnect
         {
             get
@@ -127,6 +160,12 @@ namespace CAP_ChatInteractive
         public string modVersionSaved = "";
         public string priceListUrl = "https://github.com/ekudram/RICS-Pricelist";
         public bool EnableDebugLogging = false;
+        /// <summary>
+        /// When true, after RimWorld XML load, RICS overwrites live settings from
+        /// RICS_Settings_LatestBackup.json. Sidecar file is the boot source of truth
+        /// (XML may reset this flag). Default off.
+        /// </summary>
+        public bool PreferJsonOnLoad = false;
         public bool LogAllMessages = true;
         public int MessageCooldownSeconds = 1;
 
@@ -375,6 +414,7 @@ namespace CAP_ChatInteractive
             Scribe_Values.Look(ref modVersionSaved, "modVersionSaved", "");
             Scribe_Values.Look(ref priceListUrl, "priceListUrl", "https://github.com/ekudram/RICS-Pricelist");
             Scribe_Values.Look(ref EnableDebugLogging, "enableDebugLogging", false);
+            Scribe_Values.Look(ref PreferJsonOnLoad, "preferJsonOnLoad", false);
             Scribe_Values.Look(ref LogAllMessages, "logAllMessages", true);
             Scribe_Values.Look(ref MessageCooldownSeconds, "messageCooldownSeconds", 1);
 
@@ -585,6 +625,44 @@ namespace CAP_ChatInteractive
             Scribe_Values.Look(ref TwitchRaidMinRaiders, "twitchRaidMinRaiders", 5);
             Scribe_Values.Look(ref TwitchRaidJoinWindowSeconds, "twitchRaidJoinWindowSeconds", 240);
             Scribe_Values.Look(ref TwitchRaidsAutoAddChatDuringWindow, "twitchRaidsAutoAddChatDuringWindow", true);
+        }
+
+        /// <summary>
+        /// Copies all public instance fields onto this object. Clones RewardSettings
+        /// so the backup list is not shared. Uses reflection so new global fields are
+        /// not forgotten on JSON restore.
+        /// </summary>
+        public void CopyFrom(CAPGlobalChatSettings other)
+        {
+            if (other == null) return;
+
+            foreach (var field in typeof(CAPGlobalChatSettings).GetFields(BindingFlags.Instance | BindingFlags.Public))
+            {
+                if (field.IsLiteral)
+                    continue;
+
+                if (field.FieldType == typeof(List<ChannelPoints_RewardSettings>))
+                {
+                    RewardSettings ??= new List<ChannelPoints_RewardSettings>();
+                    RewardSettings.Clear();
+                    if (other.RewardSettings == null)
+                        continue;
+
+                    foreach (var reward in other.RewardSettings)
+                    {
+                        if (reward == null) continue;
+                        RewardSettings.Add(new ChannelPoints_RewardSettings(
+                            reward.RewardName,
+                            reward.RewardUUID,
+                            reward.CoinsToAward,
+                            reward.AutomaticallyCaptureUUID,
+                            reward.Enabled));
+                    }
+                    continue;
+                }
+
+                field.SetValue(this, field.GetValue(other));
+            }
         }
     }
 

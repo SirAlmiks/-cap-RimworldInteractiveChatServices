@@ -49,9 +49,8 @@ namespace CAP_ChatInteractive
                 Directory.CreateDirectory(ModDataFolder);
             }
 
-            // === SETTINGS BACKUP FOLDER (manual JSON system) ===
-            // WHY: Provides a reliable fallback when RimWorld's Scribe/ModSettings fails to persist
-            // large settings objects. Created once at static init so every backup call is safe.
+            // === SETTINGS BACKUP FOLDER (JSON overlay / recovery) ===
+            // Fallback when RimWorld Scribe/ModSettings fails to persist large settings objects.
             BackupFolderPath = Path.Combine(ModDataFolder, "Backups");
             if (!Directory.Exists(BackupFolderPath))
             {
@@ -591,23 +590,70 @@ namespace CAP_ChatInteractive
         }
 
         // ========== RICS SETTINGS BACKUP SYSTEM (JSON) ==========
-        // WHY: Manual-only JSON backup/restore as a safety net for the known RimWorld
-        // ModSettings scribe corruption issue with very large settings graphs.
-        // Saves ONLY when the user explicitly clicks the button in the settings dialog.
-        // Location matches the requested path under Config/CAP_ChatInteractive/Backups.
-        // Keeps both a timestamped file (for history) and RICS_Settings_LatestBackup.json (for quick Load).
+        // Safety net for RimWorld ModSettings/Scribe issues with large settings graphs.
+        // Timestamped history (max 5) + RICS_Settings_LatestBackup.json for load/overlay.
         // Secrets (tokens) are included because they live in the same local AppData as config.xml.
         private static string BackupFolderPath;
 
+        public const string LatestSettingsBackupFileName = "RICS_Settings_LatestBackup.json";
+        private const int MaxTimestampedSettingsBackups = 5;
+
+        private static JsonSerializerSettings CreateSettingsBackupSerializerSettings()
+        {
+            return new JsonSerializerSettings
+            {
+                Formatting = Formatting.Indented,
+                NullValueHandling = NullValueHandling.Include,
+                DefaultValueHandling = DefaultValueHandling.Include,
+                ReferenceLoopHandling = ReferenceLoopHandling.Ignore
+            };
+        }
+
+        private static void EnsureBackupFolder()
+        {
+            if (string.IsNullOrEmpty(BackupFolderPath))
+                BackupFolderPath = Path.Combine(ModDataFolder, "Backups");
+
+            if (!Directory.Exists(BackupFolderPath))
+                Directory.CreateDirectory(BackupFolderPath);
+        }
+
+        public static string GetLatestSettingsBackupPath()
+        {
+            EnsureBackupFolder();
+            return Path.Combine(BackupFolderPath, LatestSettingsBackupFileName);
+        }
 
         /// <summary>
-        /// Saves the entire live RICS settings object (all service settings + global settings) to JSON.
-        /// Creates a timestamped backup + updates the "Latest" quick-load file.
-        /// Uses explicit JObject.FromObject on the four data sections only to avoid
-        /// Newtonsoft.Json reflection errors on RimWorld types such as Verse.TaggedString.
-        /// After saving, prunes old backups so only the 5 most recent timestamped files remain.
+        /// Builds the four-section JObject used for backup files and XML-vs-JSON compare.
+        /// Uses JObject.FromObject only on nested settings (avoids Verse.TaggedString on Mod).
+        /// </summary>
+        public static JObject BuildSettingsSnapshot(CAPChatInteractiveSettings settings)
+        {
+            var jsonSettings = CreateSettingsBackupSerializerSettings();
+            var serializer = JsonSerializer.Create(jsonSettings);
+
+            return new JObject
+            {
+                ["TwitchSettings"] = JObject.FromObject(settings?.TwitchSettings ?? new StreamServiceSettings(), serializer),
+                ["YouTubeSettings"] = JObject.FromObject(settings?.YouTubeSettings ?? new StreamServiceSettings(), serializer),
+                ["KickSettings"] = JObject.FromObject(settings?.KickSettings ?? new StreamServiceSettings(), serializer),
+                ["GlobalSettings"] = JObject.FromObject(settings?.GlobalSettings ?? new CAPGlobalChatSettings(), serializer)
+            };
+        }
+
+        /// <summary>
+        /// Saves the live RICS settings graph to JSON.
+        /// Default: timestamped file + Latest, then prune to 5 timestamped files.
         /// </summary>
         public static void SaveSettingsBackup(CAPChatInteractiveSettings settings)
+        {
+            SaveSettingsBackup(settings, writeTimestamped: true, skipTimestampIfUnchanged: false);
+        }
+
+        /// <param name="writeTimestamped">When false, only RICS_Settings_LatestBackup.json is updated (token refresh / WriteSettings).</param>
+        /// <param name="skipTimestampIfUnchanged">When true, skip a new timestamped file if canonical content matches Latest.</param>
+        public static void SaveSettingsBackup(CAPChatInteractiveSettings settings, bool writeTimestamped, bool skipTimestampIfUnchanged)
         {
             if (settings == null)
             {
@@ -617,51 +663,64 @@ namespace CAP_ChatInteractive
 
             try
             {
-                if (string.IsNullOrEmpty(BackupFolderPath))
+                EnsureBackupFolder();
+
+                JObject root = BuildSettingsSnapshot(settings);
+                string json = root.ToString(Formatting.Indented);
+                string latestPath = GetLatestSettingsBackupPath();
+
+                string existingLatest = null;
+                if (File.Exists(latestPath))
                 {
-                    BackupFolderPath = Path.Combine(ModDataFolder, "Backups");
-                    if (!Directory.Exists(BackupFolderPath))
-                        Directory.CreateDirectory(BackupFolderPath);
+                    try { existingLatest = File.ReadAllText(latestPath); }
+                    catch { /* compare will treat as changed */ }
                 }
 
-                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                string fileName = $"RICS_Settings_Backup_{timestamp}.json";
-                string filePath = Path.Combine(BackupFolderPath, fileName);
+                if (existingLatest != json)
+                    File.WriteAllText(latestPath, json);
 
-                var jsonSettings = new JsonSerializerSettings
+                if (writeTimestamped)
                 {
-                    Formatting = Formatting.Indented,
-                    NullValueHandling = NullValueHandling.Include,
-                    DefaultValueHandling = DefaultValueHandling.Include,
-                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore
-                };
+                    bool writeStamp = true;
+                    if (skipTimestampIfUnchanged && !string.IsNullOrEmpty(existingLatest))
+                    {
+                        try
+                        {
+                            writeStamp = !SettingsJsonPersistence.CanonicalEquals(JObject.Parse(existingLatest), root);
+                        }
+                        catch
+                        {
+                            writeStamp = true;
+                        }
+                    }
 
-                // === SAFE SERIALIZATION ===
-                var root = new JObject
-                {
-                    ["TwitchSettings"] = JObject.FromObject(settings.TwitchSettings ?? new StreamServiceSettings(), JsonSerializer.Create(jsonSettings)),
-                    ["YouTubeSettings"] = JObject.FromObject(settings.YouTubeSettings ?? new StreamServiceSettings(), JsonSerializer.Create(jsonSettings)),
-                    ["KickSettings"] = JObject.FromObject(settings.KickSettings ?? new StreamServiceSettings(), JsonSerializer.Create(jsonSettings)),
-                    ["GlobalSettings"] = JObject.FromObject(settings.GlobalSettings ?? new CAPGlobalChatSettings(), JsonSerializer.Create(jsonSettings))
-                };
-
-                string json = root.ToString(Formatting.Indented);
-
-                File.WriteAllText(filePath, json);
-
-                // Update latest quick-load file
-                string latestPath = Path.Combine(BackupFolderPath, "RICS_Settings_LatestBackup.json");
-                File.WriteAllText(latestPath, json);
-
-                Logger.Message($"[Backup] Settings backup saved to: {filePath}");
-
-                // === PRUNE TO KEEP ONLY 5 PAST BACKUPS ===
-                PruneOldBackups();
+                    if (writeStamp)
+                    {
+                        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                        string filePath = Path.Combine(BackupFolderPath, $"RICS_Settings_Backup_{timestamp}.json");
+                        File.WriteAllText(filePath, json);
+                        Logger.Message($"[Backup] Settings backup saved to: {filePath}");
+                        PruneOldBackups();
+                    }
+                    else
+                    {
+                        Logger.Debug("[Backup] Settings JSON unchanged; skipped timestamped backup.");
+                    }
+                }
             }
             catch (Exception ex)
             {
                 Logger.Error($"[Backup] Error saving settings backup: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Updates RICS_Settings_LatestBackup.json only (no timestamped rotation).
+        /// Used from WriteSettings for token / live-chat persistence.
+        /// </summary>
+        public static void UpdateLatestSettingsBackup(CAPChatInteractiveSettings settings)
+        {
+            SaveSettingsBackup(settings, writeTimestamped: false, skipTimestampIfUnchanged: false);
         }
 
         /// <summary>
@@ -680,8 +739,8 @@ namespace CAP_ChatInteractive
                     .OrderByDescending(f => f)  // Timestamped filenames sort lexicographically descending for newest-first
                     .ToList();
 
-                // Keep only the newest 5, delete the rest
-                for (int i = 5; i < backupFiles.Count; i++)
+                // Keep only the newest N, delete the rest
+                for (int i = MaxTimestampedSettingsBackups; i < backupFiles.Count; i++)
                 {
                     try
                     {
@@ -708,26 +767,11 @@ namespace CAP_ChatInteractive
         {
             try
             {
-                if (string.IsNullOrEmpty(BackupFolderPath))
-                {
-                    BackupFolderPath = Path.Combine(ModDataFolder, "Backups");
-                }
-
-                string latestPath = Path.Combine(BackupFolderPath, "RICS_Settings_LatestBackup.json");
-                if (!File.Exists(latestPath))
-                {
-                    Logger.Warning("[Backup] No latest backup file found.");
+                JObject root = LoadLatestSettingsBackupJObject();
+                if (root == null)
                     return null;
-                }
 
-                string jsonContent = File.ReadAllText(latestPath);
-                if (string.IsNullOrWhiteSpace(jsonContent))
-                {
-                    Logger.Warning("[Backup] Latest backup file is empty.");
-                    return null;
-                }
-
-                var backup = JsonConvert.DeserializeObject<CAPChatInteractiveSettings>(jsonContent);
+                var backup = SettingsFromSnapshot(root);
                 if (backup == null)
                 {
                     Logger.Error("[Backup] Deserialization returned null — backup may be corrupted or from incompatible version.");
@@ -745,14 +789,66 @@ namespace CAP_ChatInteractive
         }
 
         /// <summary>
-        /// Applies a deserialized backup onto the live mod settings instance.
-        /// Replaces the sub-settings objects so all tabs immediately see the restored values.
-        /// Defensive null checks protect against old/corrupt backups.
+        /// Reads Latest backup as JObject (no ModSettings allocation). Null if missing/empty.
+        /// </summary>
+        public static JObject LoadLatestSettingsBackupJObject()
+        {
+            try
+            {
+                string latestPath = GetLatestSettingsBackupPath();
+                if (!File.Exists(latestPath))
+                    return null;
+
+                string jsonContent = File.ReadAllText(latestPath);
+                if (string.IsNullOrWhiteSpace(jsonContent))
+                {
+                    Logger.Warning("[Backup] Latest backup file is empty.");
+                    return null;
+                }
+
+                return JObject.Parse(jsonContent);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"[Backup] Error reading latest settings backup JSON: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static CAPChatInteractiveSettings SettingsFromSnapshot(JObject root)
+        {
+            if (root == null)
+                return null;
+
+            var backup = new CAPChatInteractiveSettings();
+            backup.TwitchSettings = root["TwitchSettings"]?.ToObject<StreamServiceSettings>() ?? new StreamServiceSettings();
+            backup.YouTubeSettings = root["YouTubeSettings"]?.ToObject<StreamServiceSettings>() ?? new StreamServiceSettings();
+            backup.KickSettings = root["KickSettings"]?.ToObject<StreamServiceSettings>() ?? new StreamServiceSettings();
+            backup.GlobalSettings = root["GlobalSettings"]?.ToObject<CAPGlobalChatSettings>() ?? new CAPGlobalChatSettings();
+            return backup;
+        }
+
+        /// <summary>
+        /// Applies Latest JSON onto <paramref name="target"/> in place. Returns false if missing/corrupt.
+        /// </summary>
+        public static bool TryApplyLatestBackupInPlace(CAPChatInteractiveSettings target)
+        {
+            if (target == null)
+                return false;
+
+            var backup = LoadLatestSettingsBackup();
+            if (backup == null)
+                return false;
+
+            ApplyBackupToSettings(target, backup);
+            return true;
+        }
+
+        /// <summary>
+        /// Applies a deserialized backup onto the live mod settings instance (in-place field copy).
         /// </summary>
         public static void ApplyBackupToCurrentSettings(CAPChatInteractiveSettings backup)
         {
-            if (backup == null) return;
-
             var current = CAPChatInteractiveMod.Instance?.Settings;
             if (current == null)
             {
@@ -760,25 +856,22 @@ namespace CAP_ChatInteractive
                 return;
             }
 
+            ApplyBackupToSettings(current, backup);
+        }
+
+        private static void ApplyBackupToSettings(CAPChatInteractiveSettings current, CAPChatInteractiveSettings backup)
+        {
+            if (backup == null || current == null)
+                return;
+
             try
             {
-                // Replace the three service settings + global settings with the deserialized versions
-                if (backup.TwitchSettings != null)
-                    current.TwitchSettings = backup.TwitchSettings;
-                if (backup.YouTubeSettings != null)
-                    current.YouTubeSettings = backup.YouTubeSettings;
-                if (backup.KickSettings != null)
-                    current.KickSettings = backup.KickSettings;
-                if (backup.GlobalSettings != null)
-                    current.GlobalSettings = backup.GlobalSettings;
-
-                // Defensive re-initialization (handles very old backups missing sections)
-                current.TwitchSettings ??= new StreamServiceSettings();
-                current.YouTubeSettings ??= new StreamServiceSettings();
-                current.KickSettings ??= new StreamServiceSettings();
-                current.GlobalSettings ??= new CAPGlobalChatSettings();
-
-                Logger.Message("[Backup] Applied JSON backup to live mod settings. UI tabs will reflect changes.");
+                // Sidecar / live checkbox is the source of truth for this flag (XML/JSON may disagree).
+                bool preferJson = current.GlobalSettings?.PreferJsonOnLoad ?? false;
+                current.CopyFrom(backup);
+                if (current.GlobalSettings != null)
+                    current.GlobalSettings.PreferJsonOnLoad = preferJson;
+                Logger.Message("[Backup] Applied JSON backup to live mod settings (in-place).");
             }
             catch (Exception ex)
             {

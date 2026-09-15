@@ -50,6 +50,16 @@ namespace CAP_ChatInteractive
 
             Settings = GetSettings<CAPChatInteractiveSettings>();
 
+            // JSON overlay must run before auto-connect and before any WriteSettings.
+            try
+            {
+                SettingsJsonPersistence.ApplyOnModLoad(Settings);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"JSON settings overlay failed: {ex.Message}");
+            }
+
             // ============================================================
             // HARMONY INITIALIZATION 
             // ============================================================
@@ -62,12 +72,15 @@ namespace CAP_ChatInteractive
             Logger.Debug("Harmony patches applied (including AI letter notifications)");
             // ============================================================
 
-            // Ensure modVersion is set in saved settings if it's empty
+            // Ensure modVersion is set in saved settings if it's empty.
+            // Skip WriteSettings when XML/JSON mismatch is pending so we do not persist
+            // suspected-bad XML over a good Latest JSON backup.
             if (string.IsNullOrEmpty(Settings.GlobalSettings.modVersionSaved))
             {
                 Settings.GlobalSettings.modVersionSaved = Settings.GlobalSettings.modVersion;
                 Logger.Debug($"Initialized modVersionSaved to {Settings.GlobalSettings.modVersion}");
-                WriteSettings();
+                if (!SettingsJsonPersistence.HasPendingMismatch && !SettingsJsonPersistence.ProtectLatestBackup)
+                    WriteSettings();
             }
 
             // Export active mod list once at startup for external RICS-Pricelist GitHub use
@@ -134,6 +147,8 @@ namespace CAP_ChatInteractive
             InitializeServices();
             InitializeAlienCompatibilityProvider(); // HAR
             InitializeVPEPsycastProvider(); // VPE
+
+            SettingsJsonPersistence.ScheduleMismatchDialogIfNeeded();
 
             Logger.Debug("CAPChatInteractiveMod constructor completed");
         }
@@ -385,7 +400,20 @@ namespace CAP_ChatInteractive
         public override void WriteSettings()
         {
             base.WriteSettings();
-            // Store will be initialized when game starts
+
+            // Keep Latest JSON in sync with token refreshes / live-chat window, but do not
+            // rotate timestamped backups. Skip when a mismatch is protecting the JSON file.
+            if (SettingsJsonPersistence.ProtectLatestBackup)
+                return;
+
+            try
+            {
+                JsonFileManager.UpdateLatestSettingsBackup(Settings);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"Could not update latest JSON settings backup: {ex.Message}");
+            }
         }
 
         public static GameComponent_PawnAssignmentManager GetPawnAssignmentManager()

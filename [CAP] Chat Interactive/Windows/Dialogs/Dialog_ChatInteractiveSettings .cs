@@ -224,8 +224,9 @@ namespace CAP_ChatInteractive
                 var modSettings = CAPChatInteractiveMod.Instance?.Settings;
                 if (modSettings != null)
                 {
-                    JsonFileManager.SaveSettingsBackup(modSettings);
-                    Messages.Message("RICS settings backup saved.", MessageTypeDefOf.NeutralEvent);
+                    JsonFileManager.SaveSettingsBackup(modSettings, writeTimestamped: true, skipTimestampIfUnchanged: false);
+                    SettingsJsonPersistence.OnExplicitJsonSave();
+                    Messages.Message("RICS.Settings.JsonBackupSaved".Translate(), MessageTypeDefOf.NeutralEvent);
                 }
             }
 
@@ -237,13 +238,14 @@ namespace CAP_ChatInteractive
                 if (backup != null)
                 {
                     JsonFileManager.ApplyBackupToCurrentSettings(backup);
-                    Messages.Message(
-                        "RICS settings restored from backup. Close and reopen this window to fully refresh.",
-                        MessageTypeDefOf.NeutralEvent);
+                    SettingsJsonPersistence.OnExplicitJsonSave();
+                    try { CAPChatInteractiveMod.Instance?.WriteSettings(); }
+                    catch (Exception ex) { Logger.Warning($"XML WriteSettings after JSON load failed: {ex.Message}"); }
+                    Messages.Message("RICS.Settings.LoadedFromJson".Translate(), MessageTypeDefOf.NeutralEvent);
                 }
                 else
                 {
-                    Messages.Message("No settings backup found.", MessageTypeDefOf.RejectInput);
+                    Messages.Message("RICS.Settings.NoBackupFound".Translate(), MessageTypeDefOf.RejectInput);
                 }
             }
 
@@ -253,6 +255,47 @@ namespace CAP_ChatInteractive
             {
                 Close();
             }
+        }
+
+        public override void PreClose()
+        {
+            base.PreClose();
+
+            var modSettings = CAPChatInteractiveMod.Instance?.Settings;
+            try
+            {
+                CAPChatInteractiveMod.Instance?.WriteSettings();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to write XML settings on close: {ex.Message}");
+            }
+
+            if (modSettings == null)
+                return;
+
+            try
+            {
+                if (SettingsJsonPersistence.ShouldSkipAutoJsonBackup(modSettings))
+                {
+                    Logger.Message("[Backup] Skipped auto JSON backup on close — latest backup is protected after a settings mismatch.");
+                    return;
+                }
+
+                JsonFileManager.SaveSettingsBackup(modSettings, writeTimestamped: true, skipTimestampIfUnchanged: true);
+                SettingsJsonPersistence.OnExplicitJsonSave();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to auto-backup JSON settings on close: {ex.Message}");
+            }
+        }
+
+        public override void PostClose()
+        {
+            base.PostClose();
+            UIUtilities.ClearNumericBuffers();
+            TextFieldHelper.ClearAllBuffers();
         }
 
         /// <summary>
@@ -267,8 +310,9 @@ namespace CAP_ChatInteractive
                     var modSettings = CAPChatInteractiveMod.Instance?.Settings;
                     if (modSettings != null)
                     {
-                        JsonFileManager.SaveSettingsBackup(modSettings);
-                        Messages.Message("Quick timestamped backup saved.", MessageTypeDefOf.NeutralEvent);
+                        JsonFileManager.SaveSettingsBackup(modSettings, writeTimestamped: true, skipTimestampIfUnchanged: false);
+                        SettingsJsonPersistence.OnExplicitJsonSave();
+                        Messages.Message("RICS.Settings.JsonBackupSaved".Translate(), MessageTypeDefOf.NeutralEvent);
                     }
                 }),
                 new FloatMenuOption("Save as Named Theme (custom name)", () =>
@@ -282,10 +326,9 @@ namespace CAP_ChatInteractive
                             {
                                 if (!string.IsNullOrWhiteSpace(name))
                                 {
-                                    JsonFileManager.SaveSettingsBackup(modSettings);
-                                    Messages.Message(
-                                        $"Named backup saved as {name} (timestamped).",
-                                        MessageTypeDefOf.NeutralEvent);
+                                    JsonFileManager.SaveSettingsBackup(modSettings, writeTimestamped: true, skipTimestampIfUnchanged: false);
+                                    SettingsJsonPersistence.OnExplicitJsonSave();
+                                    Messages.Message("RICS.Settings.JsonBackupSaved".Translate(), MessageTypeDefOf.NeutralEvent);
                                 }
                             }));
                     }
@@ -301,11 +344,12 @@ namespace CAP_ChatInteractive
             if (backup != null)
             {
                 JsonFileManager.ApplyBackupToCurrentSettings(backup);
-                Messages.Message("Settings loaded from latest backup.", MessageTypeDefOf.NeutralEvent);
+                SettingsJsonPersistence.OnExplicitJsonSave();
+                Messages.Message("RICS.Settings.LoadedFromJson".Translate(), MessageTypeDefOf.NeutralEvent);
             }
             else
             {
-                Messages.Message("No backup found.", MessageTypeDefOf.RejectInput);
+                Messages.Message("RICS.Settings.NoBackupFound".Translate(), MessageTypeDefOf.RejectInput);
             }
         }
 

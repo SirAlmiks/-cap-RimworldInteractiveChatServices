@@ -54,4 +54,13 @@
   <RICS.AI.SetupHelp>Commands: AI_Commands SMB (incoming/outgoing). Colony reports: AI_Commands/gamestate/latest.json (file). HTTP push optional. Mini Masie polls gamestate/ with /mode rimworld. See HANDOFF_GAMESTATE_FILE.md on the mini project.</RICS.AI.SetupHelp>
   <RICS.AI.ClearLeftoverLabel>Clear any stale .json files left by crashed external bot (safe).</RICS.AI.ClearLeftoverLabel>
   <RICS.AI.ClearLeftoverButton>Clear Leftover AI Files</RICS.AI.ClearLeftoverButton>
+
+  <!-- JSON settings overlay / mismatch -->
+  <RICS.Settings.MismatchTitle>[RICS] Settings backup mismatch</RICS.Settings.MismatchTitle>
+  <RICS.Settings.MismatchBody>The settings RimWorld loaded from XML do not match the latest JSON backup.\n\nThis often happens with large mods or large mod lists, when XML does not save correctly.\n\nReview opens the current (XML) settings. Load backup restores from RICS_Settings_LatestBackup.json.</RICS.Settings.MismatchBody>
+  <RICS.Settings.MismatchReview>Review</RICS.Settings.MismatchReview>
+  <RICS.Settings.MismatchLoad>Load backup</RICS.Settings.MismatchLoad>
+  <RICS.Settings.LoadedFromJson>RICS settings loaded from JSON backup.</RICS.Settings.LoadedFromJson>
+  <RICS.Settings.JsonBackupSaved>RICS settings backup saved.</RICS.Settings.JsonBackupSaved>
+  <RICS.Settings.NoBackupFound>No settings backup found.</RICS.Settings.NoBackupFound>
 </LanguageData>

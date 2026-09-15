@@ -8,6 +8,8 @@
   <!-- Checkbox Labels -->
   <RICS.Global.EnableDebugLogging>Enable Debug Logging</RICS.Global.EnableDebugLogging>
   <RICS.Global.LogAllChatMessages>Log All Chat Messages</RICS.Global.LogAllChatMessages>
+  <RICS.Global.PreferJsonOnLoad>Load settings from latest JSON backup on startup</RICS.Global.PreferJsonOnLoad>
+  <RICS.Global.PreferJsonOnLoad.Tooltip>RimWorld still loads XML first. When this is on, RICS then overwrites from RICS_Settings_LatestBackup.json. Use this if XML keeps resetting (large mod lists). The checkbox is stored in a small sidecar file so it survives XML reset.</RICS.Global.PreferJsonOnLoad.Tooltip>
 
   <!-- Slider Label -->
   <RICS.Global.MessageCooldown>Message Cooldown: {0} seconds</RICS.Global.MessageCooldown>
