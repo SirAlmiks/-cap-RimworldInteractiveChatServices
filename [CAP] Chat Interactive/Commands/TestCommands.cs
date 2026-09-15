@@ -28,13 +28,7 @@ namespace CAP_ChatInteractive.Commands.TestCommands
 
         public override string Execute(ChatMessageWrapper messageWrapper, string[] args)
         {
-            bool isCaptoLamia =
-                messageWrapper != null
-                && string.Equals(messageWrapper.Username, "captolamia", System.StringComparison.OrdinalIgnoreCase)
-                && messageWrapper.PlatformUserId == "58513264"
-                && string.Equals(messageWrapper.Platform, "twitch", System.StringComparison.OrdinalIgnoreCase);
-
-            if (isCaptoLamia)
+            if (ChatCommandProcessor.IsVerifiedCaptolamia(messageWrapper))
             {
                 string version = CAPChatInteractiveMod.Instance?.Settings?.GlobalSettings?.modVersion ?? "?";
                 string display = !string.IsNullOrEmpty(messageWrapper.DisplayName)

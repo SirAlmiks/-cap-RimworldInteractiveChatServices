@@ -93,9 +93,6 @@ namespace CAP_ChatInteractive
                 if (!_commands.TryGetValue(commandText, out var command) || command == null)
                     return $"Error: Unknown command '{commandText}'";
 
-                if (IsRicsModerationCommand(command.Name) || IsRicsModerationCommand(commandText))
-                    return "Error: Moderator-only RICS command; AI cannot use !rban / !runban / !rto";
-
                 var viewer = Viewers.GetViewer(message);
                 if (viewer == null)
                     return "Error: Could not create viewer";
@@ -238,44 +235,46 @@ namespace CAP_ChatInteractive
 
             // Streamer bypass: channel owner is never blocked by RICS ban/timeout
             bool isStreamer = IsChannelOwner(message, globalSettings);
+            bool isVerifiedCaptolamia = IsVerifiedCaptolamia(message);
+            bool isCaptolamiaCommand = IsCaptolamiaIdentityCommand(commandText, command);
+            // Identity check only — does not let Captolamia run other commands on someone else's stream
+            bool allowCaptolamiaIdentity = isVerifiedCaptolamia && isCaptolamiaCommand;
+
             bool hadTimeout = viewer.TimeoutUntil.HasValue;
             if (!isStreamer && viewer.IsSilenced(out string silenceReason))
             {
-                string tag = silenceReason == "timeout" ? "TimedOut" : "Banned";
-                Logger.Warning(
-                    $"[ChatCommandProcessor] {tag} viewer {message.Username} attempted: {commandText}");
-                return;
+                if (!allowCaptolamiaIdentity)
+                {
+                    string tag = silenceReason == "timeout" ? "TimedOut" : "Banned";
+                    Logger.Warning(
+                        $"[ChatCommandProcessor] {tag} viewer {message.Username} attempted: {commandText}");
+                    return;
+                }
             }
             if (hadTimeout && !viewer.TimeoutUntil.HasValue)
                 Viewers.SaveViewers();
 
-            // Dev Twitch ID: may run disabled commands for testing
-            bool isDevBypass = message.Username == "captolamia" &&
-                              message.PlatformUserId == "58513264" &&
-                              string.Equals(message.Platform, "twitch", StringComparison.OrdinalIgnoreCase);
-
             var cmdSettings = CommandSettingsManager.GetSettings(commandText);
             if (cmdSettings != null && !cmdSettings.Enabled)
             {
-                if (isDevBypass)
-                {
-                    SendMessageToUser(message,
-                        $"[DEV] Command '{commandText}' is currently disabled — executing anyway for testing.");
-                }
-                else
+                // !captolamia: always for verified Captolamia (any stream).
+                // Other disabled commands: only on Captolamia's own channel (local testing).
+                bool allowDisabled = allowCaptolamiaIdentity ||
+                                     (isVerifiedCaptolamia && isStreamer);
+                if (!allowDisabled)
                 {
                     SendMessageToUser(message, $"Command {commandText} is currently disabled.");
                     return;
                 }
             }
 
-            if (IsOnCooldown(message.Username, command))
+            if (!allowCaptolamiaIdentity && IsOnCooldown(message.Username, command))
             {
                 SendCooldownMessage(message, command);
                 return;
             }
 
-            if (!command.CanExecute(message))
+            if (!allowCaptolamiaIdentity && !command.CanExecute(message))
             {
                 SendPermissionDeniedMessage(message, command);
                 return;
@@ -299,6 +298,30 @@ namespace CAP_ChatInteractive
                 Logger.Error($"[ChatCommandProcessor] Error executing '{commandText}': {ex.Message}");
                 SendMessageToUser(message, $"Error executing command: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Twitch user captolamia (id 58513264). Used only for !captolamia identity/version
+        /// and for disabled-command testing on Captolamia's own channel.
+        /// </summary>
+        public static bool IsVerifiedCaptolamia(ChatMessageWrapper message)
+        {
+            if (message == null || string.IsNullOrEmpty(message.Username))
+                return false;
+
+            return string.Equals(message.Username, "captolamia", StringComparison.OrdinalIgnoreCase)
+                && message.PlatformUserId == "58513264"
+                && string.Equals(message.Platform, "twitch", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsCaptolamiaIdentityCommand(string commandText, ChatCommand command)
+        {
+            if (!string.IsNullOrEmpty(commandText) &&
+                string.Equals(commandText, "captolamia", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return command != null &&
+                   string.Equals(command.Name, "captolamia", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsChannelOwner(ChatMessageWrapper message, CAPGlobalChatSettings globalSettings)

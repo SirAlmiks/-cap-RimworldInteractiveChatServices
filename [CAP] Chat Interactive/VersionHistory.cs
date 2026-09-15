@@ -1373,6 +1373,7 @@ Also changed message about Ownership and adding mid game to be more clear about 
 ──────────────
 - Settings window close now writes XML and a JSON backup. Save Backup still works. Only the 5 newest timestamped backups are kept.
 - If XML and the latest JSON backup do not match on load, you are asked to Review settings or Load backup.
+- Removed the general dev bypass of disabled commands from release. Captolamia can still run disabled commands on his own channel. On other streams only !captolamia runs for him (version / identity check). Everyone else still gets a RICS tip when that command is enabled.
 
 <b>ADDED</b>
 ────────────
