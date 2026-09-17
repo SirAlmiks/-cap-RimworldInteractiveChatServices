@@ -1369,9 +1369,14 @@ Also changed message about Ownership and adding mid game to be more clear about 
 - Chat moderators can silence a viewer inside RICS without touching Twitch, Kick, or YouTube. The person can still talk on the platform; RICS just ignores their commands.
 - RimWorld XML sometimes fails to save large mod settings. RICS now keeps a JSON backup and can restore from it.
 
-<b>FIXED<B>
+<b>FIXED</b>
 ───────────
 - Can no longer purchase pawn if xenotype does not exist. Must put in proper xenotype or leave blank for Baseliner.
+- Chat now shows the coin price on purchase success messages (it was dropping out of the sentence).
+- Buying a xenotype that is not on your allowed list no longer quietly gives a normal human. The buy fails instead.
+- If a new colonist would arrive with a missing or broken head, the purchase is cancelled and coins are not taken.
+- Psytrainers can only be used by actual psycasters. Skill neurotrainers and psychic amplifiers still work for everyone.
+- People using Vanilla Psycasts Expanded are treated as psycasters, so Psytrainer checks work for them.
 
 <b>UPDATED</b>
 ──────────────
