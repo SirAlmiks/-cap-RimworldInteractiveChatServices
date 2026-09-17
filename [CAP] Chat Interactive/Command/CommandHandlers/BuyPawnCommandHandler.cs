@@ -13,6 +13,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Verse;
+using CAP_ChatInteractive;
+using Logger = CAP_ChatInteractive.Logger;
 
 namespace CAP_ChatInteractive.Commands.CommandHandlers
 {
@@ -210,32 +212,34 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                         raceSettings.MinAge, raceSettings.MaxAge, raceName);
                 }
 
-                // Xenotype: Biotech only; resolve once here (GenerateAndSpawnPawn uses final name as-is)
+                // Xenotype: Biotech only. Missing/unknown names fail — never generate a silent Baseliner.
                 string finalXenotypeName = "Baseliner";
+                XenotypeDef forcedXenotypeDef = null;
+                CustomXenotype forcedCustomXenotype = null;
                 if (ModsConfig.BiotechActive)
                 {
-                    if (string.IsNullOrEmpty(xenotypeName) ||
-                        xenotypeName.Equals("Baseliner", StringComparison.OrdinalIgnoreCase))
+                    var xenoStatus = TryResolvePurchaseXenotype(
+                        xenotypeName, raceName, raceSettings,
+                        out finalXenotypeName, out forcedXenotypeDef, out forcedCustomXenotype);
+
+                    Logger.Warning(
+                        $"[BuyPawn] Xenotype resolve: requested='{xenotypeName}' race='{raceName}' " +
+                        $"status={xenoStatus} resolved='{finalXenotypeName}' " +
+                        $"def={forcedXenotypeDef?.defName ?? "null"} custom={forcedCustomXenotype?.name ?? "null"} " +
+                        $"AllowCustom={raceSettings.AllowCustomXenotypes} " +
+                        $"inEnabledDict={(raceSettings.EnabledXenotypes != null && raceSettings.EnabledXenotypes.ContainsKey(finalXenotypeName))}");
+
+                    switch (xenoStatus)
                     {
-                        if (!raceSettings.EnabledXenotypes.TryGetValue("Baseliner", out bool baselinerEnabled) || !baselinerEnabled)
-                            finalXenotypeName = PickRandomEnabledXenotype(raceSettings, raceName);
-                        else
-                            finalXenotypeName = "Baseliner";
+                        case XenotypeResolveStatus.NotFound:
+                            return "RICS.BPCH.XenotypeNotFound".Translate(xenotypeName);
+                        case XenotypeResolveStatus.Disabled:
+                            return "RICS.BPCH.XenotypeDisabled".Translate(xenotypeName, raceName);
+                        case XenotypeResolveStatus.NotAllowedForRace:
+                            return "RICS.BPCH.XenotypeNotAllowedForRace".Translate(xenotypeName, raceName);
+                        case XenotypeResolveStatus.CustomDisabled:
+                            return "RICS.BPCH.CustomXenotypesDisabled".Translate(raceName);
                     }
-                    else
-                    {
-                        finalXenotypeName = GetXenotypeDefName(xenotypeName, raceSettings);
-                    }
-
-                    bool isEnabled = raceSettings.EnabledXenotypes.TryGetValue(finalXenotypeName, out bool enabled)
-                        ? enabled
-                        : raceSettings.AllowCustomXenotypes;
-
-                    if (!isEnabled)
-                        return "RICS.BPCH.XenotypeDisabled".Translate(xenotypeName, raceName);
-
-                    if (!raceSettings.AllowCustomXenotypes && finalXenotypeName != "Baseliner")
-                        return "RICS.BPCH.CustomXenotypesDisabled".Translate(raceName);
                 }
                 // else: no Biotech → Baseliner only (ignore user xenotype arg)
 
@@ -257,7 +261,9 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                         .Translate(finalPrice, currencySymbol, raceName, viewer.Coins);
                 }
 
-                var result = GenerateAndSpawnPawn(messageWrapper.Username, raceName, finalXenotypeName, genderName, age, raceSettings);
+                var result = GenerateAndSpawnPawn(
+                    messageWrapper.Username, raceName, finalXenotypeName, genderName, age, raceSettings,
+                    forcedXenotypeDef, forcedCustomXenotype);
 
                 if (!result.Success)
                     return result.Message ?? "RICS.BPCH.Error.Purchase".Translate();
@@ -359,8 +365,17 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
         }
 
         /// <param name="xenotypeName">Already-resolved final xenotype defName (or Baseliner). Do not re-auto-pick here.</param>
-        private static BuyPawnResult GenerateAndSpawnPawn(string username, string raceName, string xenotypeName, string genderName, int age, RaceSettings raceSettings)
+        private static BuyPawnResult GenerateAndSpawnPawn(
+            string username,
+            string raceName,
+            string xenotypeName,
+            string genderName,
+            int age,
+            RaceSettings raceSettings,
+            XenotypeDef forcedXenotypeDef = null,
+            CustomXenotype forcedCustomXenotype = null)
         {
+            Pawn pawn = null;
             try
             {
                 Map map = ItemDeliveryHelper.ResolveDeliveryMap(anchorPawn: null, allowUndergroundRedirect: true);
@@ -371,14 +386,22 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                 if (pawnKindDef == null)
                     return new BuyPawnResult(false, "RICS.BPCH.PawnKindNotFound".Translate(raceName));
 
-                // Resolve XenotypeDef for generator (name already finalized by caller)
-                XenotypeDef xenotypeDef = null;
                 string resolvedXenotype = string.IsNullOrEmpty(xenotypeName) ? "Baseliner" : xenotypeName;
-                if (ModsConfig.BiotechActive && !resolvedXenotype.Equals("Baseliner", StringComparison.OrdinalIgnoreCase))
+                if (ModsConfig.BiotechActive && forcedCustomXenotype == null)
                 {
-                    xenotypeDef = DefDatabase<XenotypeDef>.GetNamedSilentFail(resolvedXenotype)
-                                  ?? DefDatabase<XenotypeDef>.AllDefs
-                                      .FirstOrDefault(x => x.label.Equals(resolvedXenotype, StringComparison.OrdinalIgnoreCase));
+                    if (forcedXenotypeDef == null)
+                        forcedXenotypeDef = FindXenotypeDef(resolvedXenotype);
+
+                    // Named xenotype must resolve. Never let vanilla pick Baseliner silently.
+                    if (!resolvedXenotype.Equals("Baseliner", StringComparison.OrdinalIgnoreCase)
+                        && forcedXenotypeDef == null)
+                    {
+                        Logger.Error($"[BuyPawn] XenotypeDef not found at generate time: '{resolvedXenotype}'");
+                        return new BuyPawnResult(false, "RICS.BPCH.XenotypeNotFound".Translate(resolvedXenotype));
+                    }
+
+                    if (forcedXenotypeDef == null)
+                        forcedXenotypeDef = XenotypeDefOf.Baseliner;
                 }
 
                 var raceDef = RaceUtils.FindRaceByName(raceName);
@@ -430,8 +453,9 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                     forceNoBackstory: false,
                     forbidAnyTitle: false,
                     forceDead: false,
-                    forcedXenotype: xenotypeDef,
-                    forceBaselinerChance: 0f,
+                    forcedXenotype: forcedCustomXenotype != null ? null : forcedXenotypeDef,
+                    forcedCustomXenotype: forcedCustomXenotype,
+                    forceBaselinerChance: forcedCustomXenotype != null ? 0f : (forcedXenotypeDef == XenotypeDefOf.Baseliner ? 1f : 0f),
                     developmentalStages: DevelopmentalStage.Adult,
                     forceNoGear: false,
                     dontGiveWeapon: true,
@@ -440,11 +464,29 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                     minimumAgeTraits: 0
                 );
 
-                Pawn pawn = PawnGenerator.GeneratePawn(request);
+                pawn = PawnGenerator.GeneratePawn(request);
                 if (pawn == null)
                 {
                     Logger.Error("[BuyPawn] PawnGenerator returned null");
                     return new BuyPawnResult(false, "RICS.BPCH.GenerationError".Translate("PawnGenerator returned null"));
+                }
+
+                string actualXeno = pawn.genes?.Xenotype?.defName ?? "null";
+                string actualXenoName = pawn.genes?.xenotypeName ?? "";
+                Logger.Warning(
+                    $"[BuyPawn] Generated pawn def={pawn.def?.defName} kind={pawn.kindDef?.defName} " +
+                    $"xenotype={actualXeno} xenotypeName='{actualXenoName}' " +
+                    $"head={pawn.story?.headType?.defName ?? "null"} " +
+                    $"body={pawn.story?.bodyType?.defName ?? "null"} " +
+                    $"HasHead={pawn.health?.hediffSet?.HasHead}");
+
+                if (!GeneratedXenotypeMatchesRequest(pawn, forcedXenotypeDef, forcedCustomXenotype, resolvedXenotype))
+                {
+                    Logger.Error(
+                        $"[BuyPawn] Xenotype mismatch: requested='{resolvedXenotype}' " +
+                        $"got def={actualXeno} name='{actualXenoName}' — discarding pawn");
+                    DiscardGeneratedPawn(pawn);
+                    return new BuyPawnResult(false, "RICS.BPCH.GenerationError".Translate("xenotype mismatch"));
                 }
 
                 if (pawn.Name is NameTriple nameTriple)
@@ -454,8 +496,9 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
 
                 if (!ItemDeliveryHelper.TryDeliverGeneratedPawn(pawn, map, out IntVec3 deliveryPos))
                 {
-                    Logger.Error("[BuyPawn] All spawn strategies failed for purchased pawn");
-                    return new BuyPawnResult(false, "RICS.BPCH.SpawnLocationNotFound".Translate());
+                    Logger.Error("[BuyPawn] Delivery failed (spawn or no drawable head graphic)");
+                    DiscardGeneratedPawn(pawn);
+                    return new BuyPawnResult(false, "RICS.BPCH.GenerationError".Translate("no drawable head graphic"));
                 }
 
                 return new BuyPawnResult(true, "RICS.BPCH.PawnGenerated".Translate(), pawn, deliveryPos);
@@ -463,6 +506,7 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             catch (Exception ex)
             {
                 Logger.Error($"[BuyPawn] Error generating pawn: {ex}");
+                DiscardGeneratedPawn(pawn);
                 return new BuyPawnResult(false, "RICS.BPCH.GenerationError".Translate(ex.Message));
             }
         }
@@ -583,52 +627,206 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             if (!raceSettings.Enabled)
                 return false;
 
-            if (!string.IsNullOrEmpty(xenotypeName) && xenotypeName != "Baseliner" && ModsConfig.BiotechActive)
-            {
-                if (!IsXenotypeAllowed(raceSettings, xenotypeName))
-                    return false;
-            }
-
+            // Xenotype is validated separately so chat gets a specific fail message
+            // (not found / not on this race's list / disabled) instead of a generic race error.
             return true;
         }
 
-        private static bool IsXenotypeAllowed(RaceSettings raceSettings, string xenotypeInput)
+        private enum XenotypeResolveStatus
         {
-            string xenoDefName = GetXenotypeDefName(xenotypeInput, raceSettings);
-
-            if (raceSettings.EnabledXenotypes == null)
-                raceSettings.EnabledXenotypes = new Dictionary<string, bool>();
-            if (raceSettings.XenotypePrices == null)
-                raceSettings.XenotypePrices = new Dictionary<string, float>();
-
-            if (raceSettings.EnabledXenotypes.ContainsKey(xenoDefName))
-                return raceSettings.EnabledXenotypes[xenoDefName];
-
-            if (raceSettings.EnabledXenotypes.Count > 0)
-            {
-                if (IsCustomXenotype(xenotypeInput, raceSettings))
-                    return raceSettings.AllowCustomXenotypes;
-                return false;
-            }
-
-            if (IsCustomXenotype(xenotypeInput, raceSettings) && !raceSettings.AllowCustomXenotypes)
-                return false;
-
-            return true;
+            Ok,
+            NotFound,
+            Disabled,
+            NotAllowedForRace,
+            CustomDisabled
         }
 
         /// <summary>
-        /// Determines if the given xenotype input is a custom xenotype (not in DefDatabase
+        /// Resolve a !pawn xenotype against Race Settings + HAR allowed list.
+        /// Missing EnabledXenotypes key is a fail (not "treat as custom").
+        /// AllowCustomXenotypes only applies to player custom xenotypes.
         /// </summary>
-        /// <param name="input"></param>
-        /// <param name="raceSettings"></param>
-        /// <returns></returns>
-        private static bool IsCustomXenotype(string input, RaceSettings raceSettings)
+        private static XenotypeResolveStatus TryResolvePurchaseXenotype(
+            string xenotypeName,
+            string raceName,
+            RaceSettings raceSettings,
+            out string resolvedName,
+            out XenotypeDef xenotypeDef,
+            out CustomXenotype customXenotype)
         {
+            resolvedName = "Baseliner";
+            xenotypeDef = null;
+            customXenotype = null;
 
-            string defName = GetXenotypeDefName(input, raceSettings);
+            if (raceSettings.EnabledXenotypes == null)
+                raceSettings.EnabledXenotypes = new Dictionary<string, bool>();
+
+            bool omittedOrBaseliner = string.IsNullOrEmpty(xenotypeName)
+                || xenotypeName.Equals("Baseliner", StringComparison.OrdinalIgnoreCase);
+
+            if (omittedOrBaseliner)
+            {
+                if (raceSettings.EnabledXenotypes.TryGetValue("Baseliner", out bool baselinerEnabled) && baselinerEnabled)
+                {
+                    resolvedName = "Baseliner";
+                    xenotypeDef = XenotypeDefOf.Baseliner;
+                    LogXenotypeGate(raceName, "Baseliner", xenotypeDef, raceSettings, inAllowed: true);
+                    return XenotypeResolveStatus.Ok;
+                }
+
+                resolvedName = PickRandomEnabledXenotype(raceSettings, raceName);
+                xenotypeDef = FindXenotypeDef(resolvedName) ?? XenotypeDefOf.Baseliner;
+                Logger.Warning($"[BuyPawn] Baseliner disabled for {raceName}; picked '{resolvedName}'");
+                return XenotypeResolveStatus.Ok;
+            }
+
+            xenotypeDef = FindXenotypeDef(xenotypeName);
+            if (xenotypeDef != null)
+            {
+                resolvedName = xenotypeDef.defName;
+                string resolvedForMatch = resolvedName;
+                bool inDict = raceSettings.EnabledXenotypes.TryGetValue(resolvedName, out bool enabled);
+                if (!inDict)
+                {
+                    var dictKey = raceSettings.EnabledXenotypes.Keys
+                        .FirstOrDefault(k => k.Equals(resolvedForMatch, StringComparison.OrdinalIgnoreCase));
+                    if (dictKey != null)
+                    {
+                        inDict = true;
+                        enabled = raceSettings.EnabledXenotypes[dictKey];
+                        resolvedName = dictKey;
+                    }
+                }
+
+                bool allowedForRace = IsXenotypeAllowedForRace(raceName, resolvedName);
+                LogXenotypeGate(raceName, resolvedName, xenotypeDef, raceSettings, allowedForRace);
+
+                if (!allowedForRace)
+                    return XenotypeResolveStatus.NotAllowedForRace;
+                if (!inDict || !enabled)
+                    return inDict ? XenotypeResolveStatus.Disabled : XenotypeResolveStatus.NotAllowedForRace;
+
+                return XenotypeResolveStatus.Ok;
+            }
+
+            customXenotype = FindCustomXenotype(xenotypeName);
+            if (customXenotype != null)
+            {
+                resolvedName = customXenotype.name;
+                Logger.Warning(
+                    $"[BuyPawn] Custom xenotype '{resolvedName}' AllowCustom={raceSettings.AllowCustomXenotypes}");
+                if (!raceSettings.AllowCustomXenotypes)
+                    return XenotypeResolveStatus.CustomDisabled;
+                return XenotypeResolveStatus.Ok;
+            }
+
+            Logger.Warning($"[BuyPawn] Xenotype not found: '{xenotypeName}' for race '{raceName}'");
+            return XenotypeResolveStatus.NotFound;
+        }
+
+        private static void LogXenotypeGate(
+            string raceName,
+            string resolvedName,
+            XenotypeDef xenotypeDef,
+            RaceSettings raceSettings,
+            bool inAllowed)
+        {
+            bool enabled = false;
+            bool inDict = raceSettings.EnabledXenotypes != null
+                && raceSettings.EnabledXenotypes.TryGetValue(resolvedName, out enabled);
+            Logger.Warning(
+                $"[BuyPawn] Xenotype gate race={raceName} xeno={resolvedName} " +
+                $"defFound={xenotypeDef != null} inEnabledDict={inDict} enabled={(inDict && enabled)} " +
+                $"inHarAllowedList={inAllowed} AllowCustom={raceSettings.AllowCustomXenotypes}");
+        }
+
+        private static bool IsXenotypeAllowedForRace(string raceName, string xenotypeDefName)
+        {
+            var raceDef = RaceUtils.FindRaceByName(raceName);
+            if (raceDef == null)
+                return false;
+
+            var allowed = Dialog_PawnRaceSettings.GetAllowedXenotypes(raceDef);
+            if (allowed == null || allowed.Count == 0)
+                return false;
+
+            return allowed.Any(x => x.Equals(xenotypeDefName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static XenotypeDef FindXenotypeDef(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            string clean = name.Trim();
+            var exact = DefDatabase<XenotypeDef>.GetNamedSilentFail(clean);
+            if (exact != null)
+                return exact;
+
             return DefDatabase<XenotypeDef>.AllDefs.FirstOrDefault(x =>
-                x.defName.Equals(defName, StringComparison.OrdinalIgnoreCase)) == null;
+                x.defName.Equals(clean, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(x.label) && x.label.Equals(clean, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static CustomXenotype FindCustomXenotype(string name)
+        {
+            var list = Current.Game?.customXenotypeDatabase?.customXenotypes;
+            if (list == null || string.IsNullOrWhiteSpace(name))
+                return null;
+
+            string clean = name.Trim();
+            return list.FirstOrDefault(c =>
+                !string.IsNullOrEmpty(c?.name) &&
+                c.name.Equals(clean, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool GeneratedXenotypeMatchesRequest(
+            Pawn pawn,
+            XenotypeDef forcedXenotypeDef,
+            CustomXenotype forcedCustomXenotype,
+            string resolvedXenotype)
+        {
+            if (pawn?.genes == null)
+                return forcedCustomXenotype == null
+                    && (forcedXenotypeDef == null
+                        || forcedXenotypeDef == XenotypeDefOf.Baseliner
+                        || resolvedXenotype.Equals("Baseliner", StringComparison.OrdinalIgnoreCase));
+
+            if (forcedCustomXenotype != null)
+            {
+                return !string.IsNullOrEmpty(pawn.genes.xenotypeName)
+                    && pawn.genes.xenotypeName.Equals(forcedCustomXenotype.name, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (forcedXenotypeDef == null
+                || forcedXenotypeDef == XenotypeDefOf.Baseliner
+                || resolvedXenotype.Equals("Baseliner", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var actual = pawn.genes.Xenotype;
+            if (actual == forcedXenotypeDef)
+                return true;
+            if (actual != null && actual.defName.Equals(forcedXenotypeDef.defName, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Requested a real xenotype and got Baseliner (or something else) — fail.
+            return false;
+        }
+
+        private static void DiscardGeneratedPawn(Pawn pawn)
+        {
+            if (pawn == null || pawn.Destroyed)
+                return;
+            try
+            {
+                if (pawn.Spawned)
+                    pawn.DeSpawn();
+                pawn.Destroy(DestroyMode.Vanish);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"[BuyPawn] Failed to discard generated pawn: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -735,29 +933,6 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             return "RICS.BPCH.Gender.Any".Translate();
         }
 
-        private static string GetXenotypeDefName(string input, RaceSettings raceSettings)
-        {
-            if (string.IsNullOrWhiteSpace(input) || input.Equals("Baseliner", StringComparison.OrdinalIgnoreCase))
-                return "Baseliner";
-
-            string clean = input.Trim();
-            if (raceSettings?.EnabledXenotypes == null)
-                return clean;
-
-            var exact = raceSettings.EnabledXenotypes.Keys
-                .FirstOrDefault(k => k.Equals(clean, StringComparison.OrdinalIgnoreCase));
-            if (exact != null)
-                return exact;
-
-            var fuzzy = raceSettings.EnabledXenotypes.Keys
-                .Where(k => k.ToLowerInvariant().Contains(clean.ToLowerInvariant()) ||
-                            clean.ToLowerInvariant().Contains(k.ToLowerInvariant()))
-                .OrderBy(k => Math.Abs(k.Length - clean.Length))
-                .FirstOrDefault();
-
-            return fuzzy ?? clean;
-        }
-
         /// <summary>
         /// Attempts to find the best matching race for the given potential race arguments.
         /// </summary>
@@ -793,6 +968,7 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             var enabled = settings.EnabledXenotypes
                 .Where(kv => kv.Value && kv.Key != "Baseliner")
                 .Select(kv => kv.Key)
+                .Where(key => string.IsNullOrEmpty(raceDefName) || IsXenotypeAllowedForRace(raceDefName, key))
                 .ToList();
 
             if (!enabled.Any())

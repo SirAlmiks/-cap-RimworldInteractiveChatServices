@@ -353,7 +353,16 @@ public static class ItemDeliveryHelper
 			// First !pawn can build Head render nodes while story.headType/bodyType are still
 			// null. Beard MeshSetFor then NREs, Head children stay null, and MapUpdate
 			// throws every frame (invisible pawn + garbage pixels on the map edge).
-			EnsureHumanlikeRenderReady(pawn);
+			// A non-null headType is not enough: GraphicFor returns null without HasHead
+			// or a real south texture. Abort delivery instead of dropping a headless pawn.
+			if (!EnsureHumanlikeRenderReady(pawn))
+			{
+				Logger.Error("TryDeliverGeneratedPawn: abort — no drawable head graphic for " +
+					(pawn.Name?.ToStringShort ?? pawn.LabelCap) +
+					$" (race={pawn.def?.defName}, xenotype={pawn.genes?.Xenotype?.defName ?? "null"}, " +
+					$"head={pawn.story?.headType?.defName ?? "null"}, HasHead={pawn.health?.hediffSet?.HasHead})");
+				return false;
+			}
 			if (IsSpaceMap(map))
 			{
 				EquipVacsuitIfNeeded(pawn);
@@ -405,65 +414,95 @@ public static class ItemDeliveryHelper
 	/// <summary>
 	/// Fill missing humanlike story graphics fields and rebuild the render tree
 	/// before the pawn is drawn (drop pod, letter portrait, or map).
+	/// Returns false when the pawn still has no drawable head (do not deliver).
 	/// </summary>
-	public static void EnsureHumanlikeRenderReady(Pawn pawn)
+	public static bool EnsureHumanlikeRenderReady(Pawn pawn)
 	{
 		if (pawn == null || pawn.Destroyed)
-			return;
+			return false;
 		if (pawn.RaceProps == null || !pawn.RaceProps.Humanlike)
-			return;
+			return true;
 		if (pawn.story == null)
 		{
 			Logger.Warning("EnsureHumanlikeRenderReady: humanlike pawn has null story — cannot repair graphics");
-			return;
+			return false;
 		}
 
 		try
 		{
-			bool repaired = false;
+			LogPawnHeadSnapshot(pawn, "before-repair");
 
 			if (pawn.story.bodyType == null)
-			{
 				pawn.story.bodyType = FallbackBodyTypeFor(pawn);
-				repaired = true;
-			}
 
-			if (pawn.story.headType == null)
+			if (!HasDrawableHeadGraphic(pawn))
 			{
+				if (pawn.health?.hediffSet != null && !pawn.health.hediffSet.HasHead)
+				{
+					Logger.Error("EnsureHumanlikeRenderReady: pawn has no Head body part — cannot draw a head");
+					LogPawnHeadSnapshot(pawn, "no-head-part");
+					return false;
+				}
+
 				IEnumerable<HeadTypeDef> randomChosen = DefDatabase<HeadTypeDef>.AllDefs.Where(h => h != null && h.randomChosen);
-				if (!pawn.story.TryGetRandomHeadFromSet(randomChosen) || pawn.story.headType == null)
-					pawn.story.TryGetRandomHeadFromSet(DefDatabase<HeadTypeDef>.AllDefs);
-				if (pawn.story.headType == null)
-					pawn.story.headType = DefDatabase<HeadTypeDef>.AllDefsListForReading.FirstOrDefault();
-				repaired = true;
+				pawn.story.TryGetRandomHeadFromSet(randomChosen);
+				if (!HasDrawableHeadGraphic(pawn))
+					pawn.story.TryGetRandomHeadFromSet(DefDatabase<HeadTypeDef>.AllDefs.Where(h => h != null));
 			}
 
 			if (pawn.story.hairDef == null)
-			{
 				pawn.story.hairDef = DefDatabase<HairDef>.AllDefsListForReading.RandomElementWithFallback();
-				repaired = true;
-			}
 
 			// Beard MeshSetFor requires headType; strip beard if head is still missing.
-			if (pawn.story.headType == null && pawn.style != null && pawn.style.beardDef != null && !pawn.style.beardDef.noGraphic)
-			{
+			if (!HasDrawableHeadGraphic(pawn) && pawn.style != null && pawn.style.beardDef != null && !pawn.style.beardDef.noGraphic)
 				pawn.style.beardDef = BeardDefOf.NoBeard;
-				repaired = true;
-			}
-
-			if (repaired)
-			{
-				Logger.Warning("EnsureHumanlikeRenderReady: filled missing appearance for " +
-					(pawn.Name?.ToStringShort ?? pawn.LabelCap) +
-					$" (body={pawn.story.bodyType?.defName ?? "null"}, head={pawn.story.headType?.defName ?? "null"})");
-			}
 
 			RebuildPawnRenderTree(pawn);
+
+			bool ok = HasDrawableHeadGraphic(pawn);
+			LogPawnHeadSnapshot(pawn, ok ? "after-repair-ok" : "after-repair-FAIL");
+			if (!ok)
+				Logger.Error("EnsureHumanlikeRenderReady: no drawable head graphic after repair for " +
+					(pawn.Name?.ToStringShort ?? pawn.LabelCap));
+			return ok;
 		}
 		catch (Exception ex)
 		{
 			Logger.Warning("EnsureHumanlikeRenderReady failed: " + ex.Message);
+			return false;
 		}
+	}
+
+	/// <summary>
+	/// Vanilla PawnRenderNode_Head.GraphicFor returns null unless HasHead and headType
+	/// have a real south texture. A non-null headType is not enough.
+	/// </summary>
+	public static bool HasDrawableHeadGraphic(Pawn pawn)
+	{
+		if (pawn?.health?.hediffSet == null || !pawn.health.hediffSet.HasHead)
+			return false;
+		HeadTypeDef head = pawn.story?.headType;
+		if (head == null || head.graphicPath.NullOrEmpty())
+			return false;
+		Texture2D tex = ContentFinder<Texture2D>.Get(head.graphicPath + "_south", reportFailure: false);
+		return tex != null;
+	}
+
+	private static void LogPawnHeadSnapshot(Pawn pawn, string stage)
+	{
+		if (pawn == null)
+			return;
+		string path = pawn.story?.headType?.graphicPath;
+		bool tex = false;
+		if (!path.NullOrEmpty())
+			tex = ContentFinder<Texture2D>.Get(path + "_south", reportFailure: false) != null;
+		Logger.Warning(
+			$"[BuyPawn] Head snapshot {stage}: race={pawn.def?.defName} " +
+			$"xenotype={pawn.genes?.Xenotype?.defName ?? "null"} " +
+			$"head={pawn.story?.headType?.defName ?? "null"} " +
+			$"body={pawn.story?.bodyType?.defName ?? "null"} " +
+			$"HasHead={pawn.health?.hediffSet?.HasHead} " +
+			$"graphicPath={path ?? "null"} southTex={tex}");
 	}
 
 	private static BodyTypeDef FallbackBodyTypeFor(Pawn pawn)

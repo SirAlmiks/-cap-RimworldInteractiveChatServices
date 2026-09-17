@@ -110,6 +110,9 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                 if (validationError != null)
                     return validationError;
 
+                if (IsPsytrainer(thingDef) && !IsPsycaster(viewerPawn))
+                    return "RICS.UICH.PsytrainerRequiresPsycaster".Translate(itemName);
+
                 // Apply first, then charge
                 if (isResurrectorSerum && viewerPawn.Dead)
                 {
@@ -169,7 +172,7 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             sb.AppendLine("RICS.UICH.Invoice.Service".Translate());
             sb.AppendLine("RICS.UICH.Invoice.Item".Translate(itemName));
             sb.AppendLine("RICS.UICH.Invoice.Separator".Translate());
-            sb.AppendLine("RICS.UICH.Invoice.Total".Translate(price, currencySymbol));
+            sb.AppendLine("RICS.UICH.Invoice.Total".Translate(price.ToString("N0"), currencySymbol));
             sb.AppendLine("RICS.UICH.Invoice.Separator".Translate());
             sb.AppendLine("RICS.UICH.Invoice.ThankYou".Translate());
             sb.AppendLine("RICS.UICH.Invoice.Restored".Translate());
@@ -281,22 +284,81 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             sb.AppendLine("RICS.UICH.Invoice.Iteminstant".Translate(itemName, quantity));
             sb.AppendLine("RICS.UICH.Invoice.Service.Immediate".Translate());
             sb.AppendLine("RICS.UICH.Invoice.Separator".Translate());
-            sb.AppendLine("RICS.UICH.Invoice.Total".Translate(price, currencySymbol));
+            sb.AppendLine("RICS.UICH.Invoice.Total".Translate(price.ToString("N0"), currencySymbol));
             sb.AppendLine("RICS.UICH.Invoice.Separator".Translate());
             sb.AppendLine("RICS.UICH.Invoice.ThankYouInstant".Translate());
             sb.AppendLine("RICS.UICH.Invoice.NoDelivery".Translate());
             return sb.ToString();
         }
 
-        private static bool HasPsylink(Verse.Pawn pawn)
+        /// <summary>
+        /// Royalty Psytrainer_* (or any GainAbility comp whose ability is a psycast).
+        /// Not skill Neurotrainers and not PsychicAmplifier (the implant that creates a psycaster).
+        /// </summary>
+        private static bool IsPsytrainer(ThingDef def)
         {
-            if (pawn?.health?.hediffSet?.hediffs == null)
+            if (def == null)
                 return false;
 
-            return pawn.health.hediffSet.hediffs.Any(hediff =>
-                hediff.def?.defName?.IndexOf("Psylink", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                hediff.def?.defName?.IndexOf("Psychic", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (def.defName.StartsWith(ThingDefGenerator_Neurotrainer.PsytrainerDefPrefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (def.comps == null)
+                return false;
+
+            foreach (var comp in def.comps)
+            {
+                if (comp is CompProperties_UseEffect_GainAbility gain
+                    && gain.ability != null
+                    && gain.ability.IsPsycast)
+                    return true;
+            }
+
+            return false;
         }
+
+        /// <summary>
+        /// True if the pawn can use a Psytrainer: vanilla psylink/PsychicAmplifier, or VPE implant level &gt; 0.
+        /// VPE pawns often have no vanilla PsychicAmplifier; GetPsylinkLevel() is then 0.
+        /// </summary>
+        private static bool IsPsycaster(Verse.Pawn pawn)
+        {
+            if (pawn?.health?.hediffSet == null)
+                return false;
+
+            try
+            {
+                if (pawn.GetPsylinkLevel() > 0)
+                    return true;
+            }
+            catch
+            {
+                // Royalty tracker missing
+            }
+
+            if (HediffDefOf.PsychicAmplifier != null
+                && pawn.health.hediffSet.HasHediff(HediffDefOf.PsychicAmplifier))
+                return true;
+
+            if (pawn.health.hediffSet.hediffs != null
+                && pawn.health.hediffSet.hediffs.Any(h => h is Hediff_Psylink))
+                return true;
+
+            try
+            {
+                var vpe = CAPChatInteractiveMod.Instance?.VPEProvider;
+                if (vpe != null && vpe.GetBasicPsycastInfo(pawn)?.Level > 0)
+                    return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"[UseItem] VPE psycaster check failed: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        private static bool HasPsylink(Verse.Pawn pawn) => IsPsycaster(pawn);
 
         private static bool IsSustainerSound(string soundDefName)
         {
@@ -571,12 +633,15 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                     }
                 }
 
-                if (thing.def.defName.IndexOf("Psytrainer", StringComparison.OrdinalIgnoreCase) >= 0 && !HasPsylink(pawn))
+                // Safety net: never apply or gift a Psytrainer if the pawn is not a psycaster.
+                // HandleUseItem should already have failed the command before charge.
+                if (IsPsytrainer(thing.def) && !IsPsycaster(pawn))
                 {
+                    Logger.Warning($"[UseItem] Blocked Psytrainer {thing.def.defName} — pawn is not a psycaster");
                     if (thing.Spawned)
                         thing.DeSpawn();
-                    if (pawn.inventory?.innerContainer == null || !pawn.inventory.innerContainer.TryAdd(thing))
-                        GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near);
+                    if (!thing.Destroyed)
+                        thing.Destroy(DestroyMode.Vanish);
                     return;
                 }
 

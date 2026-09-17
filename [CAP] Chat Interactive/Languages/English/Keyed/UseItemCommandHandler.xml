@@ -9,6 +9,7 @@
   <RICS.UICH.ItemDefMissing>Error: Item definition for '{0}' not found.</RICS.UICH.ItemDefMissing>
   <RICS.UICH.NotUsable>{0} is not a usable item.</RICS.UICH.NotUsable>
   <RICS.UICH.ResearchRequired>{0} requires research that hasn't been completed yet.</RICS.UICH.ResearchRequired>
+  <RICS.UICH.PsytrainerRequiresPsycaster>Your pawn must be a psycaster (psylink) to use {0}.</RICS.UICH.PsytrainerRequiresPsycaster>
 
   <RICS.UICH.PawnDead>Your pawn is dead. You cannot use items.</RICS.UICH.PawnDead>
   <RICS.UICH.BodyDestroyed>Your pawn's body has been completely destroyed and cannot be revived.</RICS.UICH.BodyDestroyed>
@@ -33,7 +34,7 @@
   <RICS.UICH.Invoice.Service>Service: Pawn Resurrection</RICS.UICH.Invoice.Service>
   <RICS.UICH.Invoice.Item>Item: {0}</RICS.UICH.Invoice.Item>
 
-  <RICS.UICH.Invoice.Total>Total: {0:N0} {1}</RICS.UICH.Invoice.Total>
+  <RICS.UICH.Invoice.Total>Total: {0} {1}</RICS.UICH.Invoice.Total>
 
   <RICS.UICH.Invoice.ThankYou>Thank you for using Rimazon Resurrection!</RICS.UICH.Invoice.ThankYou>
   <RICS.UICH.Invoice.Restored>Your pawn has been restored to life!</RICS.UICH.Invoice.Restored>
