@@ -1369,6 +1369,10 @@ Also changed message about Ownership and adding mid game to be more clear about 
 - Chat moderators can silence a viewer inside RICS without touching Twitch, Kick, or YouTube. The person can still talk on the platform; RICS just ignores their commands.
 - RimWorld XML sometimes fails to save large mod settings. RICS now keeps a JSON backup and can restore from it.
 
+<b>FIXED<B>
+───────────
+- Can no longer purchase pawn if xenotype does not exist. Must put in proper xenotype or leave blank for Baseliner.
+
 <b>UPDATED</b>
 ──────────────
 - Settings window close now writes XML and a JSON backup. Save Backup still works. Only the 5 newest timestamped backups are kept.
