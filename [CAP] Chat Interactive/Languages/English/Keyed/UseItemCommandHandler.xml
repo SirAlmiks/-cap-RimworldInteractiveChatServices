@@ -10,6 +10,8 @@
   <RICS.UICH.NotUsable>{0} is not a usable item.</RICS.UICH.NotUsable>
   <RICS.UICH.ResearchRequired>{0} requires research that hasn't been completed yet.</RICS.UICH.ResearchRequired>
   <RICS.UICH.PsytrainerRequiresPsycaster>Your pawn must be a psycaster (psylink) to use {0}.</RICS.UICH.PsytrainerRequiresPsycaster>
+  <RICS.UICH.SkillTrainerSkillDisabled>Your pawn cannot use the {1} skill, so {0} was not used. Coins were not taken.</RICS.UICH.SkillTrainerSkillDisabled>
+  <RICS.UICH.UseEffectRejected>Could not use {0}. Coins were not taken.</RICS.UICH.UseEffectRejected>
 
   <RICS.UICH.PawnDead>Your pawn is dead. You cannot use items.</RICS.UICH.PawnDead>
   <RICS.UICH.BodyDestroyed>Your pawn's body has been completely destroyed and cannot be revived.</RICS.UICH.BodyDestroyed>

@@ -445,6 +445,7 @@ Also changed message about Ownership and adding mid game to be more clear about 
 - Buying a xenotype that is not on your allowed list no longer quietly gives a normal human. The buy fails instead.
 - If a new colonist would arrive with a missing or broken head, the purchase is cancelled and coins are not taken.
 - Psytrainers can only be used by actual psycasters. Skill neurotrainers and psychic amplifiers still work for everyone.
+- Skill neurotrainers cannot be used with !use if the pawn cannot use that skill (coins are not taken).
 - People using Vanilla Psycasts Expanded are treated as psycasters, so Psytrainer checks work for them.
 
 <b>UPDATED</b>
@@ -465,6 +466,7 @@ Also changed message about Ownership and adding mid game to be more clear about 
 ───────────────────
 - Keys for !rban / !runban / !rto and Viewer Manager timeout labels.
 - Keys for JSON settings load option and mismatch dialog.
+- Keys for !use skill neurotrainer blocked when the pawn cannot use that skill.
 "
                 }
 

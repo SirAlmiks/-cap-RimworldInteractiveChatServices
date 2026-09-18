@@ -25,6 +25,11 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
     {
         private const string ReturnDivider = " | ";
 
+        /// <summary>
+        /// Chat <c>!use</c>: consume/apply a store item on the viewer pawn.
+        /// Usable-comp items (Psytrainer, skill Neurotrainer, implants) must pass vanilla
+        /// <see cref="CompUseEffect.CanBeUsedBy"/>-equivalent checks <b>before</b> apply or coin charge.
+        /// </summary>
         public static string HandleUseItem(ChatMessageWrapper messageWrapper, string[] args)
         {
             try
@@ -110,8 +115,15 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                 if (validationError != null)
                     return validationError;
 
+                // Vanilla CompUseEffect_GainAbility.CanBeUsedBy requires a psycaster. Fail before apply/charge.
                 if (IsPsytrainer(thingDef) && !IsPsycaster(viewerPawn))
                     return "RICS.UICH.PsytrainerRequiresPsycaster".Translate(itemName);
+
+                // Vanilla CompUseEffect_LearnSkill.CanBeUsedBy rejects TotallyDisabled / no skills.
+                // Learn(..., direct: true) would still add XP if we skipped this and called DoEffect.
+                SkillDef trainerSkill = GetSkillTrainerSkill(thingDef);
+                if (trainerSkill != null && !CanPawnUseSkill(viewerPawn, trainerSkill))
+                    return "RICS.UICH.SkillTrainerSkillDisabled".Translate(itemName, trainerSkill.LabelCap);
 
                 // Apply first, then charge
                 if (isResurrectorSerum && viewerPawn.Dead)
@@ -122,7 +134,8 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                 }
                 else
                 {
-                    UseItemImmediately(thingDef, quantity, viewerPawn);
+                    if (!UseItemImmediately(thingDef, quantity, viewerPawn))
+                        return "RICS.UICH.UseEffectRejected".Translate(itemName);
                 }
 
                 viewer.TakeCoins(finalPrice);
@@ -358,6 +371,40 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             return false;
         }
 
+        /// <summary>
+        /// Skill taught by a Neurotrainer via <see cref="CompProperties_UseEffect_LearnSkill"/>.
+        /// Null if not a skill trainer. Psytrainers and PsychicAmplifier are not skill trainers.
+        /// </summary>
+        private static SkillDef GetSkillTrainerSkill(ThingDef def)
+        {
+            if (def?.comps == null)
+                return null;
+
+            foreach (var comp in def.comps)
+            {
+                if (comp is CompProperties_UseEffect_LearnSkill learn && learn.skill != null)
+                    return learn.skill;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Same gate as vanilla <see cref="CompUseEffect_LearnSkill.CanBeUsedBy"/>:
+        /// pawn must have a skill record that is not <see cref="SkillRecord.TotallyDisabled"/>.
+        /// </summary>
+        private static bool CanPawnUseSkill(Verse.Pawn pawn, SkillDef skill)
+        {
+            if (pawn?.skills == null || skill == null)
+                return false;
+
+            SkillRecord record = pawn.skills.GetSkill(skill);
+            if (record == null)
+                return false;
+
+            return !record.TotallyDisabled;
+        }
+
         private static bool HasPsylink(Verse.Pawn pawn) => IsPsycaster(pawn);
 
         private static bool IsSustainerSound(string soundDefName)
@@ -462,11 +509,17 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             }
         }
 
-        private static void UseItemImmediately(ThingDef thingDef, int quantity, Verse.Pawn pawn)
+        /// <summary>
+        /// Apply one or more copies of the item. For CompUsable items, false means no effect ran — do not charge.
+        /// Inventory-only paths (medicine, leftover defs) still count as applied.
+        /// </summary>
+        /// <returns>False if a usable-comp item applied no effect (do not charge coins).</returns>
+        private static bool UseItemImmediately(ThingDef thingDef, int quantity, Verse.Pawn pawn)
         {
             if (thingDef == null || pawn == null || pawn.Map == null)
-                return;
+                return false;
 
+            bool anyApplied = false;
             for (int i = 0; i < quantity; i++)
             {
                 Thing thing = ThingMaker.MakeThing(thingDef);
@@ -474,43 +527,62 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                 if (thingDef.IsIngestible && thingDef.ingestible != null)
                 {
                     ApplyIngestibleImmediately(thing, thingDef, pawn);
+                    anyApplied = true;
                 }
                 else if (thingDef.IsMedicine)
                 {
                     if (pawn.inventory?.innerContainer == null || !pawn.inventory.innerContainer.TryAdd(thing))
                         GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near);
                     SoundDefOf.Interact_Tend.PlayOneShot(new TargetInfo(pawn.Position, pawn.Map));
+                    anyApplied = true;
                 }
                 else if (thingDef.HasComp(typeof(CompUsable)) || thingDef.HasComp(typeof(CompUsableImplant)))
                 {
-                    UseCompUseEffectItem(thing, pawn);
+                    if (!UseCompUseEffectItem(thing, pawn))
+                    {
+                        if (!anyApplied)
+                            return false;
+                        break;
+                    }
+                    anyApplied = true;
                     SoundDefOf.PsychicPulseGlobal.PlayOneShot(new TargetInfo(pawn.Position, pawn.Map));
                 }
                 else if (thingDef.defName.IndexOf("Psytrainer", StringComparison.OrdinalIgnoreCase) >= 0 ||
                          thingDef.defName.IndexOf("Neurotrainer", StringComparison.OrdinalIgnoreCase) >= 0 ||
                          thingDef.defName == "PsychicAmplifier")
                 {
-                    UseCompUseEffectItem(thing, pawn);
+                    if (!UseCompUseEffectItem(thing, pawn))
+                    {
+                        if (!anyApplied)
+                            return false;
+                        break;
+                    }
+                    anyApplied = true;
                 }
                 else if (thingDef.defName.IndexOf("Neuroformer", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     if (pawn.inventory?.innerContainer == null || !pawn.inventory.innerContainer.TryAdd(thing))
                         GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near);
                     SoundDefOf.PsychicPulseGlobal.PlayOneShot(new TargetInfo(pawn.Position, pawn.Map));
+                    anyApplied = true;
                 }
                 else if (thingDef.defName.IndexOf("MechSerum", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     if (pawn.inventory?.innerContainer == null || !pawn.inventory.innerContainer.TryAdd(thing))
                         GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near);
                     SoundDefOf.MechSerumUsed.PlayOneShot(new TargetInfo(pawn.Position, pawn.Map));
+                    anyApplied = true;
                 }
                 else
                 {
                     if (pawn.inventory?.innerContainer == null || !pawn.inventory.innerContainer.TryAdd(thing))
                         GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near);
                     SoundDefOf.Standard_Pickup.PlayOneShot(new TargetInfo(pawn.Position, pawn.Map));
+                    anyApplied = true;
                 }
             }
+
+            return anyApplied;
         }
 
         /// <summary>
@@ -614,12 +686,17 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             }
         }
 
-        private static void UseCompUseEffectItem(Thing thing, Verse.Pawn pawn)
+        /// <summary>
+        /// Spawn a temp thing, run <see cref="CompUseEffect.CanBeUsedBy"/> then <see cref="CompUseEffect.DoEffect"/>.
+        /// Skipping CanBeUsedBy used to skip DoEffect but still charge coins. If nothing is accepted, vanish and return false.
+        /// </summary>
+        /// <returns>True if at least one CompUseEffect ran. False: vanish temp thing, caller must not charge.</returns>
+        private static bool UseCompUseEffectItem(Thing thing, Verse.Pawn pawn)
         {
             try
             {
                 if (thing == null || pawn?.Map == null)
-                    return;
+                    return false;
 
                 GenSpawn.Spawn(thing, pawn.Position, pawn.Map);
 
@@ -638,13 +715,20 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                 if (IsPsytrainer(thing.def) && !IsPsycaster(pawn))
                 {
                     Logger.Warning($"[UseItem] Blocked Psytrainer {thing.def.defName} — pawn is not a psycaster");
-                    if (thing.Spawned)
-                        thing.DeSpawn();
-                    if (!thing.Destroyed)
-                        thing.Destroy(DestroyMode.Vanish);
-                    return;
+                    VanishTempThing(thing);
+                    return false;
                 }
 
+                // HandleUseItem should already have failed before charge; vanish if a later path still reaches here.
+                SkillDef trainerSkill = GetSkillTrainerSkill(thing.def);
+                if (trainerSkill != null && !CanPawnUseSkill(pawn, trainerSkill))
+                {
+                    Logger.Warning($"[UseItem] Blocked Neurotrainer {thing.def.defName} — skill {trainerSkill.defName} is disabled");
+                    VanishTempThing(thing);
+                    return false;
+                }
+
+                bool appliedAny = false;
                 foreach (var compUseEffect in compUseEffects)
                 {
                     AcceptanceReport acceptance = compUseEffect.CanBeUsedBy(pawn);
@@ -652,6 +736,7 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                         continue;
 
                     compUseEffect.DoEffect(pawn);
+                    appliedAny = true;
                     try
                     {
                         compUseEffect.SelectedUseOption(pawn);
@@ -662,24 +747,44 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                     }
                 }
 
+                if (!appliedAny)
+                {
+                    Logger.Warning($"[UseItem] No usable effect applied for {thing.def?.defName}");
+                    VanishTempThing(thing);
+                    return false;
+                }
+
                 if (thing.Spawned)
                     thing.DeSpawn();
+                if (thing != null && !thing.Destroyed)
+                    thing.Destroy(DestroyMode.Vanish);
 
                 SoundDefOf.PsychicPulseGlobal.PlayOneShot(new TargetInfo(pawn.Position, pawn.Map));
+                return true;
             }
             catch (Exception ex)
             {
                 Logger.Error($"[UseItem] Error using item {thing?.def?.defName}: {ex}");
-                if (thing != null)
-                {
-                    if (thing.Spawned)
-                        thing.DeSpawn();
-                    if (pawn.inventory?.innerContainer == null || !pawn.inventory.innerContainer.TryAdd(thing))
-                    {
-                        if (pawn.Map != null)
-                            GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near);
-                    }
-                }
+                VanishTempThing(thing);
+                return false;
+            }
+        }
+
+        private static void VanishTempThing(Thing thing)
+        {
+            if (thing == null)
+                return;
+
+            try
+            {
+                if (thing.Spawned)
+                    thing.DeSpawn();
+                if (!thing.Destroyed)
+                    thing.Destroy(DestroyMode.Vanish);
+            }
+            catch
+            {
+                // already gone
             }
         }
 
