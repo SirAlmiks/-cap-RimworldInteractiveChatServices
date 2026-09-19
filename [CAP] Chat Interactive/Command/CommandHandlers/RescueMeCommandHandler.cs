@@ -391,6 +391,7 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
                     }
                 }
 
+                // Re-apply after site insert — map/site generation can clear flags.
                 if (pawn.mindState != null)
                     pawn.mindState.WillJoinColonyIfRescued = true;
 
@@ -426,6 +427,11 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             if (pawn.Spawned)
                 pawn.DeSpawn(DestroyMode.Vanish);
 
+            // Walking player-faction prisoners never get a Rescue float menu
+            // (Rescue is downed-only) and cannot be captured as "yours".
+            if (pawn.Faction == Faction.OfPlayer)
+                pawn.SetFaction(null);
+
             try
             {
                 if (pawn.guest != null && hostFaction != null)
@@ -434,6 +440,48 @@ namespace CAP_ChatInteractive.Commands.CommandHandlers
             catch
             {
                 // soft-fail guest status — site still usable
+            }
+
+            // Vanilla Rescue (1.6 FloatMenuOptionProvider) only appears on downed pawns.
+            // WillJoinColonyIfRescued is checked after the Rescue job, not for standing prisoners.
+            EnsureDownedForRescue(pawn);
+
+            if (pawn.mindState != null)
+                pawn.mindState.WillJoinColonyIfRescued = true;
+        }
+
+        /// <summary>
+        /// Knock the pawn out so the site map shows Rescue instead of a healthy
+        /// prisoner sitting in a cell with no reclaim option.
+        /// </summary>
+        private static void EnsureDownedForRescue(Pawn pawn)
+        {
+            if (pawn == null || pawn.Dead || pawn.Downed)
+                return;
+
+            try
+            {
+                HediffDef anesthetic = HediffDefOf.Anesthetic
+                    ?? DefDatabase<HediffDef>.GetNamedSilentFail("Anesthetic");
+                if (anesthetic != null && pawn.health != null)
+                {
+                    pawn.health.AddHediff(HediffMaker.MakeHediff(anesthetic, pawn));
+                    if (pawn.Downed)
+                        return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"[RescueMe] Anesthetic down failed: {ex.Message}");
+            }
+
+            try
+            {
+                HealthUtility.DamageUntilDowned(pawn, allowBleedingWounds: false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"[RescueMe] DamageUntilDowned failed: {ex.Message}");
             }
         }
 
