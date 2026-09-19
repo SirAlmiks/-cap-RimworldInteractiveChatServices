@@ -430,7 +430,7 @@ Also changed message about Ownership and adding mid game to be more clear about 
             {"1.50",
 @"===========================================================
                          RICS version 1.50 - Changelog
-                         Pre-Release
+                         September 19, 2026
 ===========================================================
 
 <b>MEMORANDUM</b>
